@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 def _try_import_bus():
     try:
-        from agora.bus import BusEnvelope, publish  # type: ignore
+        from bus_foundation import BusEnvelope, publish  # type: ignore
 
         return BusEnvelope, publish
     except ImportError:

@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.0",
     "fastmcp>=3.4",
     "structlog>=24.0",
+    "bus-foundation",
 ]
 
 [project.optional-dependencies]
@@ -26,3 +27,6 @@ llm-gateway = "llm_gateway.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_gateway"]
+
+[tool.uv.sources]
+bus-foundation = { path = "../bus-foundation" }
