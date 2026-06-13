@@ -16,6 +16,8 @@
 ```bash
 llm-gateway list              # 列出可用模型
 llm-gateway list --ssot       # 从 L0 M1 节点加载
+llm-gateway list --registry-data   # 从 P4 静态 registry_data 加载
+llm-gateway route --role reviewer --capability reasoning
 llm-gateway generate "你好"    # 生成
 llm-gateway mcp               # 启动 MCP Server
 ```

@@ -13,21 +13,37 @@ from __future__ import annotations
 import os
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
 from .detection import create_provider, detect_backends
 from .provider import LLMRequest
 from .registry import ModelRegistry
+from .registry_data_loader import build_static_registry, load_role_routes, route_role_request
 from .scheduler import ModelScheduler
 from .ssot_loader import load_ssot_models
 
 
-def cmd_list(use_ssot: bool = False) -> int:
+def cmd_list(use_ssot: bool = False, use_registry_data: bool = False) -> int:
+    if use_registry_data:
+        reg, seeded = build_static_registry()
+        routes = load_role_routes()
+        models = reg.list_models()
+        print(f"registry_data ({seeded} models, {len(routes)} role routes):")
+        for m in models:
+            cost = m.cost_per_1k_tokens or {}
+            c_in = cost.get("input", "?")
+            c_out = cost.get("output", "?")
+            print(
+                f"  🟢 {m.id:40s} ctx={m.context_window:<7d} "
+                f"lat={m.metadata.get('latency_label', '?'):6s} in=${c_in} out=${c_out}"
+            )
+        return 0
+
     if use_ssot:
         m1_dir = Path.home() / "Workspace" / "projects" / "ecos" / "src" / "ecos" / "ssot" / "mof" / "m1" / "compute_engine"
         if m1_dir.exists():
-            import asyncio
             reg = ModelRegistry()
             load_ssot_models(reg, str(m1_dir))
             asyncio.run(reg.refresh())
@@ -51,6 +67,20 @@ def cmd_list(use_ssot: bool = False) -> int:
         models = p.available_models()
         status = "🟢" if p.is_available() else "🔴"
         print(f"  {status} {p.provider_name}: {', '.join(models[:3])}")
+    return 0
+
+
+def cmd_route(role: str, capabilities: list[str] | None = None) -> int:
+    selection = route_role_request(role, required_capabilities=capabilities or [])
+    if not selection:
+        print(f"No registry_data route found for role={role}", file=sys.stderr)
+        return 1
+    model = selection.model
+    print(f"role={role}")
+    print(f"model={model.id}")
+    print(f"provider={selection.provider_name}")
+    print(f"capabilities={','.join(model.capabilities)}")
+    print(f"reasoning={selection.reasoning}")
     return 0
 
 
@@ -99,6 +129,16 @@ def main(argv: list[str] | None = None) -> int:
 
     list_p = sub.add_parser("list", help="List available models")
     list_p.add_argument("--ssot", action="store_true", help="从 L0 M1 节点加载")
+    list_p.add_argument("--registry-data", action="store_true", help="从静态 registry_data 加载")
+
+    route_p = sub.add_parser("route", help="Route a role against registry_data")
+    route_p.add_argument("--role", required=True, help="Role name (planner/researcher/reviewer/operator/critic)")
+    route_p.add_argument(
+        "--capability",
+        action="append",
+        default=[],
+        help="Required capability (repeatable)",
+    )
 
     gen = sub.add_parser("generate", help="Generate LLM response")
     gen.add_argument("prompt")
@@ -113,7 +153,12 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.cmd == "list":
-        return cmd_list(use_ssot=getattr(args, "ssot", False))
+        return cmd_list(
+            use_ssot=getattr(args, "ssot", False),
+            use_registry_data=getattr(args, "registry_data", False),
+        )
+    elif args.cmd == "route":
+        return cmd_route(args.role, capabilities=args.capability)
     elif args.cmd == "generate":
         return cmd_generate(args.prompt, args.model, args.provider)
     elif args.cmd == "mcp":

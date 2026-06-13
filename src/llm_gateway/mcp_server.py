@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +8,8 @@ from pydantic import BaseModel
 from .detection import detect_backends
 from .provider import LLMRequest, ToolSchema
 from .registry import ModelRegistry
-from .scheduler import ModelScheduler, SchedulerConfig
+from .registry_data_loader import build_static_registry
+from .scheduler import ModelScheduler
 
 # Load L0 M1 compute_engine nodes
 M1_ENGINE_DIR = Path.home() / "Workspace" / "projects" / "ecos" / "src" / "ecos" / "ssot" / "mof" / "m1" / "compute_engine"
@@ -20,15 +20,17 @@ if M1_ENGINE_DIR.exists():
     import asyncio
     from .ssot_loader import load_ssot_models
     load_ssot_models(_registry, str(M1_ENGINE_DIR))
+    _scheduler = ModelScheduler(_registry)
     try:
         _count = asyncio.run(_registry.refresh())
         _loaded_rates = _scheduler.load_quota_rates()
         print(f"[llm-gateway] Loaded {_count} models, {_loaded_rates} with real prices from quota_rates.json")
     except Exception as e:
         print(f"[llm-gateway] M1 nodes loaded but refresh failed: {e}")
-    _scheduler = ModelScheduler(_registry)
 else:
-    print(f"[llm-gateway] M1 engine dir not found: {M1_ENGINE_DIR}")
+    _registry, _count = build_static_registry()
+    _scheduler = ModelScheduler(_registry)
+    print(f"[llm-gateway] M1 engine dir not found: {M1_ENGINE_DIR}; loaded {_count} static registry_data models instead")
 
 mcp = FastMCP("llm-gateway")
 

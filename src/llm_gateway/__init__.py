@@ -51,6 +51,7 @@ from .providers.gemini_provider import GeminiProvider
 from .providers.hitl_provider import HitlLLMProvider
 from .providers.ollama_provider import OllamaProvider
 from .providers.openai_provider import OpenAIProvider
+from .registry_data_loader import build_static_registry, load_registry_data, load_role_routes, route_role_request
 from .ssot_loader import load_ssot_models
 
 __version__ = "0.4.0"
@@ -68,6 +69,10 @@ __all__ = (  # noqa: RUF022
     "create_provider",
     "detect_backends",
     "load_ssot_models",
+    "load_registry_data",
+    "load_role_routes",
+    "build_static_registry",
+    "route_role_request",
     # ── Concrete providers ──
     "AnthropicProvider",
     "DeepSeekProvider",
