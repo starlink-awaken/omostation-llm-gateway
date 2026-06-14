@@ -15,6 +15,8 @@ import json
 import logging
 import os
 import time as _time
+
+from .quota_ledger import append_quota_ledger_event
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
@@ -43,6 +45,11 @@ def record_llm_cost(model: str, input_tokens: int, output_tokens: int) -> None:
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
         }
+        from .registry_data_loader import estimate_model_cost
+
+        estimated_cost_usd = estimate_model_cost(model, input_tokens=input_tokens, output_tokens=output_tokens)
+        if estimated_cost_usd:
+            record["estimated_cost_usd"] = estimated_cost_usd
         _COST_LOG.parent.mkdir(parents=True, exist_ok=True)
         line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
         fd = os.open(str(_COST_LOG), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
@@ -50,6 +57,12 @@ def record_llm_cost(model: str, input_tokens: int, output_tokens: int) -> None:
             os.write(fd, line)
         finally:
             os.close(fd)
+        append_quota_ledger_event(
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+        )
     except Exception:  # noqa: S110
         pass  # non-blocking
 

@@ -44,6 +44,9 @@ class GenerateRequest(BaseModel):
 @mcp.tool()
 async def llm_generate(req: GenerateRequest) -> str:
     """Generate LLM response using the unified gateway with full schema support."""
+    if _scheduler is not None and _scheduler._refresh_task is None:
+        _scheduler.start_auto_refresh()
+
     providers = detect_backends()
     if not providers:
         return json.dumps({"error": "No LLM backend available."})

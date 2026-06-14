@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .policies import score_models
+from .quota_ledger import write_quota_summary
 from .registry import ModelRegistry
 from .types import (
     DEFAULT_SCHEDULER_CONFIG,
@@ -84,8 +85,10 @@ class ModelScheduler:
                     model.cost_per_1k_tokens["input"] = r["input"]
                     model.cost_per_1k_tokens["output"] = r.get("output", r["input"])
                     updated += 1
-        self._quota_low_mode = self._is_quota_low(data.get("quota"))
+        quota_payload = data.get("quota")
+        self._quota_low_mode = self._is_quota_low(quota_payload)
         self._last_quota_refresh_at = time.time()
+        write_quota_summary(quota_payload)
         return updated
 
     def _is_quota_low(self, payload: object) -> bool:
