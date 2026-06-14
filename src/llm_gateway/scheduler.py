@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -39,6 +40,8 @@ class ModelScheduler:
         self._config = config or DEFAULT_SCHEDULER_CONFIG
         self._load_map: dict[str, LoadInfo] = {}
         self._refresh_task: asyncio.Task[None] | None = None
+        self._quota_low_mode = False
+        self._last_quota_refresh_at = 0.0
 
     @classmethod
     def from_m1_dir(cls, m1_dir: str, config: SchedulerConfig | None = None) -> ModelScheduler:
@@ -61,13 +64,14 @@ class ModelScheduler:
         """
         CACHE_PATH = Path.home() / ".runtime" / "cache" / "quota_rates.json"
         if not CACHE_PATH.exists():
+            self._quota_low_mode = False
             return 0
 
-        import json
         try:
             with open(CACHE_PATH) as f:
                 data = json.load(f)
         except (json.JSONDecodeError, Exception):
+            self._quota_low_mode = False
             return 0
 
         rates = data.get("rates", {})
@@ -80,7 +84,50 @@ class ModelScheduler:
                     model.cost_per_1k_tokens["input"] = r["input"]
                     model.cost_per_1k_tokens["output"] = r.get("output", r["input"])
                     updated += 1
+        self._quota_low_mode = self._is_quota_low(data.get("quota"))
+        self._last_quota_refresh_at = time.time()
         return updated
+
+    def _is_quota_low(self, payload: object) -> bool:
+        ratio = self._extract_remaining_ratio(payload)
+        return ratio is not None and ratio < self._config.quota_low_remaining_ratio
+
+    def _extract_remaining_ratio(self, payload: object) -> float | None:
+        if isinstance(payload, dict):
+            for key in ("remaining_ratio", "remaining_pct", "remaining_percentage", "ratio", "percent_remaining"):
+                value = payload.get(key)
+                normalized = self._normalize_ratio(value)
+                if normalized is not None:
+                    return normalized
+
+            remaining = payload.get("remaining")
+            limit = payload.get("limit") or payload.get("total") or payload.get("quota")
+            if isinstance(remaining, (int, float)) and isinstance(limit, (int, float)) and limit > 0:
+                return max(0.0, min(1.0, float(remaining) / float(limit)))
+
+            ratios = [self._extract_remaining_ratio(value) for value in payload.values()]
+            ratios = [value for value in ratios if value is not None]
+            return min(ratios) if ratios else None
+
+        if isinstance(payload, list):
+            ratios = [self._extract_remaining_ratio(item) for item in payload]
+            ratios = [value for value in ratios if value is not None]
+            return min(ratios) if ratios else None
+
+        return None
+
+    @staticmethod
+    def _normalize_ratio(value: object) -> float | None:
+        if not isinstance(value, (int, float)):
+            return None
+        numeric = float(value)
+        if numeric < 0:
+            return 0.0
+        if numeric <= 1:
+            return numeric
+        if numeric <= 100:
+            return numeric / 100.0
+        return None
 
     async def select_model(
         self,
@@ -96,6 +143,9 @@ class ModelScheduler:
             4. Apply load penalty
             5. Return highest-scoring model
         """
+        if self._quota_low_mode:
+            self.load_quota_rates()
+
         all_models = self._registry.get_all()
         merged_policy = policy or ModelRoutePolicy(strategy=self._config.default_policy)
 
@@ -161,6 +211,11 @@ class ModelScheduler:
                 await asyncio.sleep(interval_ms / 1000)
                 try:
                     await self._registry.refresh()
+                    if (
+                        time.time() - self._last_quota_refresh_at
+                        >= self._config.quota_cache_refresh_interval_ms / 1000
+                    ):
+                        self.load_quota_rates()
                 except Exception as exc:
                     _log.warning("[ModelScheduler] auto-refresh failed: %s", exc)
 

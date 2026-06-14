@@ -102,6 +102,8 @@ class SchedulerConfig:
     """Configuration for the model scheduler."""
 
     health_check_interval_ms: int = 30_000
+    quota_cache_refresh_interval_ms: int = 300_000
+    quota_low_remaining_ratio: float = 0.05
     load_window_size: int = 10
     default_policy: str = "balanced"
     cost_weight: float = 0.3
