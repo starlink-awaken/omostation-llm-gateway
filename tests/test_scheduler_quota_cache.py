@@ -13,7 +13,7 @@ sys.modules.setdefault("yaml", types.SimpleNamespace(safe_load=lambda *_args, **
 
 from llm_gateway.registry import ModelRegistry
 from llm_gateway import quota_ledger
-from llm_gateway.provider import record_llm_cost
+from llm_gateway.provider import LLMResponse, finalize_llm_response, record_llm_cost
 from llm_gateway.scheduler import ModelScheduler
 from llm_gateway.types import ChatResult, ModelDescriptor, ModelRequest, SchedulerConfig
 from llm_gateway.providers.base import BaseLLMProvider
@@ -189,10 +189,49 @@ def test_record_llm_cost_appends_estimated_quota_usage(tmp_path, monkeypatch):
     monkeypatch.setattr("llm_gateway.provider.append_quota_ledger_event", quota_ledger.append_quota_ledger_event)
     monkeypatch.setattr(quota_ledger, "LEDGER_LOG", ledger_log)
 
-    record_llm_cost("dummy/model-a", 1000, 200)
+    record_llm_cost(
+        "dummy/model-a",
+        1000,
+        200,
+        provider="ollama",
+        latency_ms=125.5,
+        tokens_per_second=9.56,
+    )
 
     cost_payload = json.loads(cost_log.read_text(encoding="utf-8").strip())
     ledger_payload = json.loads(ledger_log.read_text(encoding="utf-8").strip())
     assert cost_payload["estimated_cost_usd"] == 0.33
+    assert cost_payload["provider"] == "ollama"
+    assert cost_payload["node_id"] == "macmini-ollama"
+    assert cost_payload["route_type"] == "local"
+    assert cost_payload["latency_ms"] == 125.5
+    assert cost_payload["tokens_per_second"] == 9.56
     assert ledger_payload["estimated_cost_usd"] == 0.33
     assert ledger_payload["input_tokens"] == 1000
+
+
+def test_finalize_llm_response_persists_trace_metadata(tmp_path, monkeypatch):
+    cost_log = tmp_path / "runtime" / "data" / "llm_cost.jsonl"
+    monkeypatch.setattr("llm_gateway.provider._COST_LOG", cost_log)
+    monkeypatch.setattr("llm_gateway.registry_data_loader.estimate_model_cost", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr("llm_gateway.provider.append_quota_ledger_event", lambda **_kwargs: None)
+    monkeypatch.setattr("llm_gateway.provider._time.perf_counter", lambda: 10.25)
+
+    response = LLMResponse(
+        content="ok",
+        provider="ollama",
+        model="ollama/qwen3",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    finalized = finalize_llm_response(response, 10.0)
+
+    assert finalized.metadata["node_id"] == "macmini-ollama"
+    assert finalized.metadata["node_label"] == "MacMini (Ollama)"
+    assert finalized.metadata["route_type"] == "local"
+    assert finalized.metadata["latency_ms"] == 250.0
+    assert finalized.metadata["tokens_per_second"] == 600.0
+    payload = json.loads(cost_log.read_text(encoding="utf-8").strip())
+    assert payload["node_label"] == "MacMini (Ollama)"
+    assert payload["latency_ms"] == 250.0

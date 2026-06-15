@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time as _time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -20,6 +21,7 @@ from ..provider import (
     LLMRequest,
     LLMResponse,
     _with_llm_retry,
+    finalize_llm_response,
 )
 
 _log = logging.getLogger(__name__)
@@ -112,6 +114,7 @@ class AnthropicProvider(LLMProvider):
             raise
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        started_at = _time.perf_counter()
         try:
             client = self._get_client()
             messages: list[dict] = list(request.context) + [{"role": "user", "content": request.prompt}]  # noqa: RUF005
@@ -127,7 +130,7 @@ class AnthropicProvider(LLMProvider):
                 base_delay=1.0,
             )
             content: str = response.content[0].text if response.content else ""
-            return LLMResponse(
+            llm_response = LLMResponse(
                 content=content,
                 provider=self.provider_name,
                 model=model,
@@ -135,6 +138,7 @@ class AnthropicProvider(LLMProvider):
                 output_tokens=response.usage.output_tokens,
                 finish_reason=response.stop_reason or "stop",
             )
+            return finalize_llm_response(llm_response, started_at)
         except Exception as exc:
             _log.error("AnthropicProvider.complete failed: %s", exc)
             raise

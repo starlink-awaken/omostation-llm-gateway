@@ -55,10 +55,14 @@ class LLMGatewayHandler(BaseHTTPRequestHandler):
             resp = provider.complete(req)
             result: dict[str, Any] = {
                 "content": resp.content,
+                "provider": resp.provider,
                 "model": resp.model,
                 "input_tokens": resp.input_tokens,
                 "output_tokens": resp.output_tokens,
             }
+            for key in ("latency_ms", "tokens_per_second", "node_id", "node_label", "route_type"):
+                if key in resp.metadata:
+                    result[key] = resp.metadata[key]
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()

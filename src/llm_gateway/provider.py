@@ -32,7 +32,32 @@ _log = logging.getLogger(__name__)
 _COST_LOG = Path(os.environ.get("RUNTIME_HOME", str(Path.home() / "runtime"))) / "data" / "llm_cost.jsonl"
 
 
-def record_llm_cost(model: str, input_tokens: int, output_tokens: int) -> None:
+def infer_compute_route(provider: str | None, model: str | None) -> dict[str, str]:
+    """Infer the physical route for a completed LLM call."""
+    provider_name = (provider or "").lower()
+    model_name = (model or "").lower()
+
+    if "lmstudio" in provider_name or "lmstudio" in model_name:
+        return {"node_id": "y7000p-lmstudio", "node_label": "Y7000P (LMStudio)", "route_type": "local"}
+    if "ollama" in provider_name or "ollama" in model_name:
+        return {"node_id": "macmini-ollama", "node_label": "MacMini (Ollama)", "route_type": "local"}
+    if provider_name in {"hitl", "none", "mock"}:
+        return {"node_id": "local-mac", "node_label": "Local-Mac", "route_type": "local"}
+    return {"node_id": "cloud-cc-switch", "node_label": "Cloud (cc-switch)", "route_type": "cloud"}
+
+
+def record_llm_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    provider: str | None = None,
+    node_id: str | None = None,
+    node_label: str | None = None,
+    route_type: str | None = None,
+    latency_ms: float | None = None,
+    tokens_per_second: float | None = None,
+) -> None:
     """Record an LLM call's token usage to the cost log (non-blocking).
 
     Called from provider implementations after each successful ``complete()``.
@@ -45,6 +70,19 @@ def record_llm_cost(model: str, input_tokens: int, output_tokens: int) -> None:
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
         }
+        route = infer_compute_route(provider, model)
+        if provider:
+            record["provider"] = provider
+        record["node_id"] = node_id or route["node_id"]
+        record["node_label"] = node_label or route["node_label"]
+        record["route_type"] = route_type or route["route_type"]
+        total_tokens = int(input_tokens) + int(output_tokens)
+        if latency_ms is not None:
+            record["latency_ms"] = round(float(latency_ms), 3)
+        if tokens_per_second is None and latency_ms and latency_ms > 0:
+            tokens_per_second = total_tokens / (float(latency_ms) / 1000.0)
+        if tokens_per_second is not None:
+            record["tokens_per_second"] = round(float(tokens_per_second), 3)
         from .registry_data_loader import estimate_model_cost
 
         estimated_cost_usd = estimate_model_cost(model, input_tokens=input_tokens, output_tokens=output_tokens)
@@ -65,6 +103,33 @@ def record_llm_cost(model: str, input_tokens: int, output_tokens: int) -> None:
         )
     except Exception:  # noqa: S110
         pass  # non-blocking
+
+
+def finalize_llm_response(response: LLMResponse, started_at: float) -> LLMResponse:
+    """Attach trace metadata and persist a cost/trace log entry."""
+    latency_ms = max((_time.perf_counter() - started_at) * 1000.0, 0.0)
+    total_tokens = int(response.input_tokens) + int(response.output_tokens)
+    tokens_per_second = total_tokens / (latency_ms / 1000.0) if latency_ms > 0 and total_tokens > 0 else 0.0
+    route = infer_compute_route(response.provider, response.model)
+    response.metadata.update(
+        {
+            "latency_ms": round(latency_ms, 3),
+            "tokens_per_second": round(tokens_per_second, 3),
+            **route,
+        }
+    )
+    record_llm_cost(
+        response.model,
+        response.input_tokens,
+        response.output_tokens,
+        provider=response.provider,
+        node_id=route["node_id"],
+        node_label=route["node_label"],
+        route_type=route["route_type"],
+        latency_ms=latency_ms,
+        tokens_per_second=tokens_per_second,
+    )
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +398,7 @@ class MockLLMProvider(LLMProvider):
         )
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        started_at = _time.perf_counter()
         response = LLMResponse(
             content=f"Mock response to: {request.prompt[:50]}",
             provider="mock",
@@ -340,9 +406,7 @@ class MockLLMProvider(LLMProvider):
             input_tokens=len(request.prompt.split()),
             output_tokens=10,
         )
-        # X3 cost tracking — silent fail per record_llm_cost contract
-        record_llm_cost(response.model, response.input_tokens, response.output_tokens)
-        return response
+        return finalize_llm_response(response, started_at)
 
 
 class NoneProvider(LLMProvider):
@@ -367,11 +431,10 @@ class NoneProvider(LLMProvider):
         )
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        started_at = _time.perf_counter()
         response = LLMResponse(
             content="",
             provider="none",
             model="none",
         )
-        # X3 cost tracking — NoneProvider 默认 0 tokens
-        record_llm_cost(response.model, 0, 0)
-        return response
+        return finalize_llm_response(response, started_at)

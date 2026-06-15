@@ -6,9 +6,10 @@ When the entire LLM pool has failed, this provider asks a human for the response
 from __future__ import annotations
 
 import logging
+import time as _time
 from collections.abc import AsyncIterator
 
-from ..provider import LLMProvider, LLMRequest, LLMResponse
+from ..provider import LLMProvider, LLMRequest, LLMResponse, finalize_llm_response
 
 _log = logging.getLogger(__name__)
 
@@ -50,23 +51,26 @@ class HitlLLMProvider(LLMProvider):
             )
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        started_at = _time.perf_counter()
         _log.warning("[HITL] LLM generation falling back to human expert!")
 
         try:
             _log.info("[HITL] Dispatching request to hitl_gate_01...")
-            return LLMResponse(
+            response = LLMResponse(
                 content="[HITL] Human intervention requested. Please check the TUI.",
                 model="human-expert",
                 provider="hitl",
                 metadata={"hitl_triggered": True},
             )
+            return finalize_llm_response(response, started_at)
         except Exception as e:
             _log.error(f"[HITL] Failed to trigger human intervention: {e}")
-            return LLMResponse(
+            response = LLMResponse(
                 content=f"[ERROR] HITL failed: {e}",
                 model="error",
                 provider="hitl",
             )
+            return finalize_llm_response(response, started_at)
 
     async def stream_generate(self, request: LLMRequest) -> AsyncIterator[str]:
         resp = await self.generate(request)

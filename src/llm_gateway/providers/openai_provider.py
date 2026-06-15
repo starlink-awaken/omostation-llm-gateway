@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time as _time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -20,6 +21,7 @@ from ..provider import (
     LLMRequest,
     LLMResponse,
     _with_llm_retry,
+    finalize_llm_response,
 )
 
 _log = logging.getLogger(__name__)
@@ -116,6 +118,7 @@ class OpenAIProvider(LLMProvider):
             raise
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        started_at = _time.perf_counter()
         try:
             client = self._get_client()
             messages: list[dict] = []
@@ -137,7 +140,7 @@ class OpenAIProvider(LLMProvider):
                 base_delay=1.0,
             )
             choice = resp.choices[0]
-            return LLMResponse(
+            response = LLMResponse(
                 content=choice.message.content or "",
                 provider=self.provider_name,
                 model=model,
@@ -145,6 +148,7 @@ class OpenAIProvider(LLMProvider):
                 output_tokens=resp.usage.completion_tokens if resp.usage else 0,
                 finish_reason=choice.finish_reason or "stop",
             )
+            return finalize_llm_response(response, started_at)
         except Exception as exc:
             _log.error("OpenAIProvider.complete failed: %s", exc)
             raise

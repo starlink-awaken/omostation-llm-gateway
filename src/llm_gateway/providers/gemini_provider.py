@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time as _time
 from collections.abc import AsyncIterator
 
 from ..provider import (
@@ -19,6 +20,7 @@ from ..provider import (
     LLMRequest,
     LLMResponse,
     _with_llm_retry,
+    finalize_llm_response,
 )
 
 _log = logging.getLogger(__name__)
@@ -86,7 +88,9 @@ class GeminiProvider(LLMProvider):
         # same way — delegate to generate via asyncio.run for the sync path.
         import asyncio
 
-        return asyncio.run(self.generate(request))
+        started_at = _time.perf_counter()
+        response = asyncio.run(self.generate(request))
+        return finalize_llm_response(response, started_at)
 
     async def stream_generate(self, request: LLMRequest) -> AsyncIterator[str]:
         try:

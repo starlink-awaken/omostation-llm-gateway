@@ -7,6 +7,7 @@ for asynchronous / streaming calls.
 from __future__ import annotations
 
 import logging
+import time as _time
 from collections.abc import AsyncIterator
 
 from ..provider import (
@@ -14,6 +15,7 @@ from ..provider import (
     LLMRequest,
     LLMResponse,
     _with_llm_retry,
+    finalize_llm_response,
 )
 
 _log = logging.getLogger(__name__)
@@ -93,6 +95,7 @@ class OllamaProvider(LLMProvider):
             raise
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        started_at = _time.perf_counter()
         model = request.model or self.default_model
         try:
             import requests
@@ -114,20 +117,22 @@ class OllamaProvider(LLMProvider):
             resp.raise_for_status()
             data = resp.json()
             content = data.get("message", {}).get("content", "")
-            return LLMResponse(
+            response = LLMResponse(
                 content=content,
                 provider=self.provider_name,
                 model=model,
                 input_tokens=data.get("prompt_eval_count", 0) or 0,
                 output_tokens=data.get("eval_count", 0) or 0,
             )
+            return finalize_llm_response(response, started_at)
         except Exception as exc:
             _log.error("OllamaProvider.complete failed: %s", exc)
-            return LLMResponse(
+            response = LLMResponse(
                 content=f"[Ollama error: {exc}]",
                 provider=self.provider_name,
                 model=model,
             )
+            return finalize_llm_response(response, started_at)
 
     async def stream_generate(self, request: LLMRequest) -> AsyncIterator[str]:
         model = request.model or self.default_model
