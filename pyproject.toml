@@ -17,6 +17,7 @@ dependencies = [
     "fastmcp>=3.4",
     "structlog>=24.0",
     "bus-foundation",
+    "pytest>=9.0.3",
 ]
 
 [project.optional-dependencies]
